@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os" // Added for Render environment variables
 	"sort"
 	"strconv"
 	"strings"
@@ -167,7 +168,12 @@ func main() {
 		})
 	})
 
-	r.Run(":8080")
+	// Updated port logic for Render deployment
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	r.Run(":" + port)
 }
 
 // Scrape helper using selectors from EinthusanProvider.kt

@@ -3,12 +3,13 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"os" // Added for Render environment variables
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/lithammer/fuzzysearch/fuzzy"
 )
@@ -49,6 +50,16 @@ type ActorResponse struct {
 
 func main() {
 	r := gin.Default()
+
+	// CORS Configuration
+	// This allows your website (thirai.me) to communicate with this API.
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"https://thirai.me", "http://thirai.me", "https://www.thirai.me"},
+		AllowMethods:     []string{"GET", "POST", "OPTIONS", "PUT"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+	}))
 
 	// 0. MAIN PAGE: List all available endpoints
 	r.GET("/", func(c *gin.Context) {
@@ -94,7 +105,6 @@ func main() {
 			return
 		}
 
-		// Replicates FuzzySearch logic from EinthusanProvider.kt
 		sort.Slice(movies, func(i, j int) bool {
 			scoreI := fuzzy.RankMatch(strings.ToLower(query), strings.ToLower(movies[i].Title))
 			scoreJ := fuzzy.RankMatch(strings.ToLower(query), strings.ToLower(movies[j].Title))
@@ -113,7 +123,6 @@ func main() {
 
 		var targetUrl string
 		if category == "popular" {
-			// Targeted Popularity URL as requested
 			targetUrl = fmt.Sprintf("%s/movie/results/?find=Popularity&lang=%s&ptype=view&tp=alltime", mainUrl, language)
 		} else {
 			targetUrl = fmt.Sprintf("%s/movie/results/?find=Recent&lang=%s", mainUrl, language)
@@ -168,7 +177,6 @@ func main() {
 		})
 	})
 
-	// Updated port logic for Render deployment
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -176,7 +184,7 @@ func main() {
 	r.Run(":" + port)
 }
 
-// Scrape helper using selectors from EinthusanProvider.kt
+// Scrape helper
 func scrapeEinthusan(url string) ([]MovieEntry, error) {
 	res, err := http.Get(url)
 	if err != nil {

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,7 +18,7 @@ import (
 
 const mainUrl = "https://einthusan.tv"
 
-// Data structures matching your provided JSON formats
+// Data structures
 type MovieEntry struct {
 	ImgUrl  string `json:"img_url"`
 	PageUrl string `json:"page_url"`
@@ -45,14 +47,17 @@ type ActorResponse struct {
 	Language  string       `json:"language"`
 	Movies    []MovieEntry `json:"movies"`
 	NextPage  int          `json:"next_page"`
-	Page     int          `json:"page"`
+	Page      int          `json:"page"`
+}
+
+type WatchResponse struct {
+	Title    string `json:"title"`
+	VideoUrl string `json:"video_url"`
 }
 
 func main() {
 	r := gin.Default()
 
-	// CORS Configuration
-	// This allows your website (thirai.me) to communicate with this API.
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"https://thirai.me", "http://thirai.me", "https://www.thirai.me"},
 		AllowMethods:     []string{"GET", "POST", "OPTIONS", "PUT"},
@@ -61,120 +66,96 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// 0. MAIN PAGE: List all available endpoints
 	r.GET("/", func(c *gin.Context) {
-		endpoints := gin.H{
-			"message": "Welcome to the Einthusan API Wrapper",
-			"endpoints": []gin.H{
-				{
-					"path":        "/search/:language?q=:query",
-					"description": "Search for movies in a specific language",
-					"example":     "/search/tamil?q=theri",
-				},
-				{
-					"path":        "/language/:language?category=popular|recent&page=1",
-					"description": "Browse movies by category and language",
-					"example":     "/language/tamil?category=popular&page=1",
-				},
-				{
-					"path":        "/actors/:language/:actorcode?page=1",
-					"description": "Get movies by a specific actor code",
-					"example":     "/actors/tamil/1Uv6Det8Ej?page=1",
-				},
-			},
-		}
-		c.JSON(http.StatusOK, endpoints)
+		c.JSON(http.StatusOK, gin.H{"message": "Welcome to the Einthusan API Wrapper"})
 	})
 
-	// 1. SEARCH: /search/(LANGUAGE)?q=(SEARCH)
+	// 1. SEARCH
 	r.GET("/search/:language", func(c *gin.Context) {
 		language := c.Param("language")
 		query := c.Query("q")
-
 		if query == "" {
 			c.JSON(http.StatusOK, SearchResponse{Language: language, Movies: []MovieEntry{}, Query: query})
 			return
 		}
-
 		fixedQuery := strings.ReplaceAll(query, " ", "+")
 		targetUrl := fmt.Sprintf("%s/movie/results/?lang=%s&query=%s", mainUrl, language, fixedQuery)
-		
 		movies, err := scrapeEinthusan(targetUrl)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
 		sort.Slice(movies, func(i, j int) bool {
 			scoreI := fuzzy.RankMatch(strings.ToLower(query), strings.ToLower(movies[i].Title))
 			scoreJ := fuzzy.RankMatch(strings.ToLower(query), strings.ToLower(movies[j].Title))
 			return scoreI > scoreJ
 		})
-
 		c.JSON(http.StatusOK, SearchResponse{Language: language, Movies: movies, Query: query})
 	})
 
-	// 2. BROWSE: /language/(LANGUAGE)?category=popular|recent&page=1
+	// 2. BROWSE
 	r.GET("/language/:language", func(c *gin.Context) {
 		language := c.Param("language")
 		category := strings.ToLower(c.DefaultQuery("category", "recent"))
 		pageStr := c.DefaultQuery("page", "1")
 		page, _ := strconv.Atoi(pageStr)
-
 		var targetUrl string
 		if category == "popular" {
 			targetUrl = fmt.Sprintf("%s/movie/results/?find=Popularity&lang=%s&ptype=view&tp=alltime", mainUrl, language)
 		} else {
 			targetUrl = fmt.Sprintf("%s/movie/results/?find=Recent&lang=%s", mainUrl, language)
 		}
-
 		if page > 1 {
 			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
 		}
-
 		movies, err := scrapeEinthusan(targetUrl)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
-		c.JSON(http.StatusOK, BrowseResponse{
-			Category: category,
-			HasMore:  len(movies) > 0,
-			Language: language,
-			Movies:   movies,
-			NextPage: page + 1,
-			Page:     page,
-		})
+		c.JSON(http.StatusOK, BrowseResponse{Category: category, HasMore: len(movies) > 0, Language: language, Movies: movies, NextPage: page + 1, Page: page})
 	})
 
-	// 3. ACTORS: /actors/(LANGUAGE)/(ACTORCODE)?page=1
+	// 3. ACTORS
 	r.GET("/actors/:language/:actorcode", func(c *gin.Context) {
 		language := c.Param("language")
 		actorCode := c.Param("actorcode")
 		pageStr := c.DefaultQuery("page", "1")
 		page, _ := strconv.Atoi(pageStr)
-
 		targetUrl := fmt.Sprintf("%s/movie/results/?find=Cast&id=%s&lang=%s&role=", mainUrl, actorCode, language)
 		if page > 1 {
 			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
 		}
-
 		movies, err := scrapeEinthusan(targetUrl)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		c.JSON(http.StatusOK, ActorResponse{ActorID: actorCode, ActorName: "Unknown Actor", HasMore: len(movies) > 0, Language: language, Movies: movies, NextPage: page + 1, Page: page})
+	})
 
-		c.JSON(http.StatusOK, ActorResponse{
-			ActorID:   actorCode,
-			ActorName: "Unknown Actor",
-			HasMore:   len(movies) > 0,
-			Language:  language,
-			Movies:    movies,
-			NextPage:  page + 1,
-			Page:      page,
-		})
+	// 4. WATCH: Updated to fix the ampersand escaping issue
+	r.GET("/watch", func(c *gin.Context) {
+		pageUrl := c.Query("url")
+		if pageUrl == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "URL parameter is required"})
+			return
+		}
+
+		watchData, err := scrapeWatchDetails(pageUrl)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Prevent JSON ampersand escaping (\u0026)
+		c.Status(http.StatusOK)
+		c.Header("Content-Type", "application/json; charset=utf-8")
+		encoder := json.NewEncoder(c.Writer)
+		encoder.SetEscapeHTML(false) // This ensures "&" stays as "&" in the JSON response
+		if err := encoder.Encode(watchData); err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+		}
 	})
 
 	port := os.Getenv("PORT")
@@ -184,40 +165,64 @@ func main() {
 	r.Run(":" + port)
 }
 
-// Scrape helper
 func scrapeEinthusan(url string) ([]MovieEntry, error) {
 	res, err := http.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
-
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	if err != nil {
 		return nil, err
 	}
-
 	var movies []MovieEntry
 	doc.Find("#UIMovieSummary > ul > li").Each(func(i int, s *goquery.Selection) {
 		title := strings.TrimSpace(s.Find("div.block2 > a.title > h3").Text())
 		href, _ := s.Find("div.block2 > a.title").Attr("href")
 		imgSrc, _ := s.Find("div.block1 > a > img").Attr("src")
-
 		if title != "" {
 			fullImg := imgSrc
 			if strings.HasPrefix(imgSrc, "//") {
 				fullImg = "https:" + imgSrc
-			} else if !strings.HasPrefix(imgSrc, "http") {
-				fullImg = "https:" + imgSrc
 			}
-
-			movies = append(movies, MovieEntry{
-				ImgUrl:  fullImg,
-				PageUrl: mainUrl + href,
-				Title:   title,
-			})
+			movies = append(movies, MovieEntry{ImgUrl: fullImg, PageUrl: mainUrl + href, Title: title})
 		}
 	})
-
 	return movies, nil
+}
+
+func scrapeWatchDetails(url string) (*WatchResponse, error) {
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	title := strings.TrimSpace(doc.Find("#UIMovieSummary div.block2 a.title h3").First().Text())
+	videoPlayer := doc.Find("#UIVideoPlayer")
+	
+	// Mimic Kotlin provider logic: try MP4 first, then HLS
+	mp4Link, _ := videoPlayer.Attr("data-mp4-link")
+	if mp4Link == "" {
+		mp4Link, _ = videoPlayer.Attr("data-hls-link")
+	}
+
+	finalUrl := mp4Link
+	if finalUrl != "" {
+		if strings.HasPrefix(finalUrl, "//") {
+			finalUrl = "https:" + finalUrl
+		}
+		// Replace IP with CDN domain per EinthusanProvider.kt logic
+		re := regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+		finalUrl = re.ReplaceAllString(finalUrl, "cdn1.einthusan.io")
+	}
+
+	return &WatchResponse{
+		Title:    title,
+		VideoUrl: finalUrl,
+	}, nil
 }

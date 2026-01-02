@@ -53,6 +53,7 @@ type ActorResponse struct {
 type WatchResponse struct {
 	Title    string `json:"title"`
 	VideoUrl string `json:"video_url"`
+	ImgUrl   string `json:"img_url"` // Added to include poster in watch endpoint
 }
 
 func main() {
@@ -66,7 +67,6 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Updated Root Endpoint to display all available routes
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "thirai api",
@@ -241,7 +241,6 @@ func main() {
 	r.Run(":" + port)
 }
 
-// Scrapers remain unchanged from original logic
 func scrapeEinthusan(url string) ([]MovieEntry, error) {
 	res, err := http.Get(url)
 	if err != nil {
@@ -278,19 +277,36 @@ func scrapeWatchDetails(url string) (*WatchResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Scrape the Title
 	title := strings.TrimSpace(doc.Find("#UIMovieSummary div.block2 a.title h3").First().Text())
+
+	// Scrape the Poster URL
+	imgSrc, _ := doc.Find("#UIMovieSummary div.block1 img").Attr("src")
+	if strings.HasPrefix(imgSrc, "//") {
+		imgSrc = "https:" + imgSrc
+	}
+
+	// Scrape the Video Link
 	videoPlayer := doc.Find("#UIVideoPlayer")
 	mp4Link, _ := videoPlayer.Attr("data-mp4-link")
 	if mp4Link == "" {
 		mp4Link, _ = videoPlayer.Attr("data-hls-link")
 	}
+
 	finalUrl := mp4Link
 	if finalUrl != "" {
 		if strings.HasPrefix(finalUrl, "//") {
 			finalUrl = "https:" + finalUrl
 		}
+		// Replace IP with CDN domain as per original logic
 		re := regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
 		finalUrl = re.ReplaceAllString(finalUrl, "cdn1.einthusan.io")
 	}
-	return &WatchResponse{Title: title, VideoUrl: finalUrl}, nil
+
+	return &WatchResponse{
+		Title:    title,
+		VideoUrl: finalUrl,
+		ImgUrl:   imgSrc, // Included in response
+	}, nil
 }

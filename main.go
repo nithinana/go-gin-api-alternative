@@ -66,8 +66,21 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// Updated Root Endpoint to display all available routes
 	r.GET("/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "Welcome to the Einthusan API Wrapper"})
+		c.JSON(http.StatusOK, gin.H{
+			"message": "thirai api",
+			"endpoints": gin.H{
+				"search": "/search/:language?q=movie_title",
+				"browse": "/language/:language?category=recent|popular&page=1",
+				"actors": "/actors/:language/:actorcode?page=1",
+				"genre":  "/genre/:language?action=0-4&comedy=0-4&romance=0-4&storyline=0-4&performance=0-4&page=1",
+				"decade": "/decade/:language/:decade?page=1",
+				"year":   "/year/:language/:year?page=1",
+				"watch":  "/watch?url=einthusan_page_url",
+			},
+			"example_usage": "Try /year/tamil/2025 or /genre/hindi?action=4",
+		})
 	})
 
 	// 1. SEARCH
@@ -134,25 +147,88 @@ func main() {
 		c.JSON(http.StatusOK, ActorResponse{ActorID: actorCode, ActorName: "Unknown Actor", HasMore: len(movies) > 0, Language: language, Movies: movies, NextPage: page + 1, Page: page})
 	})
 
-	// 4. WATCH: Updated to fix the ampersand escaping issue
+	// 4. GENRE
+	r.GET("/genre/:language", func(c *gin.Context) {
+		language := c.Param("language")
+		action := c.DefaultQuery("action", "0")
+		comedy := c.DefaultQuery("comedy", "0")
+		romance := c.DefaultQuery("romance", "0")
+		storyline := c.DefaultQuery("storyline", "0")
+		performance := c.DefaultQuery("performance", "0")
+		pageStr := c.DefaultQuery("page", "1")
+		page, _ := strconv.Atoi(pageStr)
+
+		targetUrl := fmt.Sprintf(
+			"%s/movie/results/?lang=%s&find=Rating&action=%s&comedy=%s&romance=%s&storyline=%s&performance=%s&ratecount=1",
+			mainUrl, language, action, comedy, romance, storyline, performance,
+		)
+		if page > 1 {
+			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
+		}
+		movies, err := scrapeEinthusan(targetUrl)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, BrowseResponse{Category: "Genre", HasMore: len(movies) > 0, Language: language, Movies: movies, NextPage: page + 1, Page: page})
+	})
+
+	// 5. DECADE
+	r.GET("/decade/:language/:decade", func(c *gin.Context) {
+		language := c.Param("language")
+		decade := c.Param("decade")
+		pageStr := c.DefaultQuery("page", "1")
+		page, _ := strconv.Atoi(pageStr)
+
+		targetUrl := fmt.Sprintf("%s/movie/results/?decade=%s&find=Decade&lang=%s", mainUrl, decade, language)
+		if page > 1 {
+			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
+		}
+
+		movies, err := scrapeEinthusan(targetUrl)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, BrowseResponse{Category: "Decade: " + decade, HasMore: len(movies) > 0, Language: language, Movies: movies, NextPage: page + 1, Page: page})
+	})
+
+	// 6. YEAR
+	r.GET("/year/:language/:year", func(c *gin.Context) {
+		language := c.Param("language")
+		year := c.Param("year")
+		pageStr := c.DefaultQuery("page", "1")
+		page, _ := strconv.Atoi(pageStr)
+
+		targetUrl := fmt.Sprintf("%s/movie/results/?find=Year&lang=%s&year=%s", mainUrl, language, year)
+		if page > 1 {
+			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
+		}
+
+		movies, err := scrapeEinthusan(targetUrl)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, BrowseResponse{Category: "Year: " + year, HasMore: len(movies) > 0, Language: language, Movies: movies, NextPage: page + 1, Page: page})
+	})
+
+	// 7. WATCH
 	r.GET("/watch", func(c *gin.Context) {
 		pageUrl := c.Query("url")
 		if pageUrl == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "URL parameter is required"})
 			return
 		}
-
 		watchData, err := scrapeWatchDetails(pageUrl)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
-		// Prevent JSON ampersand escaping (\u0026)
 		c.Status(http.StatusOK)
 		c.Header("Content-Type", "application/json; charset=utf-8")
 		encoder := json.NewEncoder(c.Writer)
-		encoder.SetEscapeHTML(false) // This ensures "&" stays as "&" in the JSON response
+		encoder.SetEscapeHTML(false)
 		if err := encoder.Encode(watchData); err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 		}
@@ -165,6 +241,7 @@ func main() {
 	r.Run(":" + port)
 }
 
+// Scrapers remain unchanged from original logic
 func scrapeEinthusan(url string) ([]MovieEntry, error) {
 	res, err := http.Get(url)
 	if err != nil {
@@ -201,28 +278,19 @@ func scrapeWatchDetails(url string) (*WatchResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	title := strings.TrimSpace(doc.Find("#UIMovieSummary div.block2 a.title h3").First().Text())
 	videoPlayer := doc.Find("#UIVideoPlayer")
-	
-	// Mimic Kotlin provider logic: try MP4 first, then HLS
 	mp4Link, _ := videoPlayer.Attr("data-mp4-link")
 	if mp4Link == "" {
 		mp4Link, _ = videoPlayer.Attr("data-hls-link")
 	}
-
 	finalUrl := mp4Link
 	if finalUrl != "" {
 		if strings.HasPrefix(finalUrl, "//") {
 			finalUrl = "https:" + finalUrl
 		}
-		// Replace IP with CDN domain per EinthusanProvider.kt logic
 		re := regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
 		finalUrl = re.ReplaceAllString(finalUrl, "cdn1.einthusan.io")
 	}
-
-	return &WatchResponse{
-		Title:    title,
-		VideoUrl: finalUrl,
-	}, nil
+	return &WatchResponse{Title: title, VideoUrl: finalUrl}, nil
 }

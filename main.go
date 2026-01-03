@@ -53,7 +53,7 @@ type ActorResponse struct {
 type WatchResponse struct {
 	Title    string `json:"title"`
 	VideoUrl string `json:"video_url"`
-	ImgUrl   string `json:"img_url"` // Added to include poster in watch endpoint
+	ImgUrl   string `json:"img_url"` 
 }
 
 func main() {
@@ -74,12 +74,12 @@ func main() {
 				"search": "/search/:language?q=movie_title",
 				"browse": "/language/:language?category=recent|popular&page=1",
 				"actors": "/actors/:language/:actorcode?page=1",
-				"genre":  "/genre/:language?action=0-4&comedy=0-4&romance=0-4&storyline=0-4&performance=0-4&page=1",
+				"genre":  "/genre/:language?action=0-4&comedy=0-4&romance=0-4&storyline=0-4&performance=0-4&ratecount=1&page=1",
 				"decade": "/decade/:language/:decade?page=1",
 				"year":   "/year/:language/:year?page=1",
 				"watch":  "/watch?url=einthusan_page_url",
 			},
-			"example_usage": "Try /year/tamil/2025 or /genre/hindi?action=4",
+			"example_usage": "Try /year/tamil/2025 or /genre/hindi?action=4&ratecount=5",
 		})
 	})
 
@@ -155,12 +155,14 @@ func main() {
 		romance := c.DefaultQuery("romance", "0")
 		storyline := c.DefaultQuery("storyline", "0")
 		performance := c.DefaultQuery("performance", "0")
+		ratecount := c.DefaultQuery("ratecount", "1") // Dynamic ratecount
+		
 		pageStr := c.DefaultQuery("page", "1")
 		page, _ := strconv.Atoi(pageStr)
 
 		targetUrl := fmt.Sprintf(
-			"%s/movie/results/?lang=%s&find=Rating&action=%s&comedy=%s&romance=%s&storyline=%s&performance=%s&ratecount=1",
-			mainUrl, language, action, comedy, romance, storyline, performance,
+			"%s/movie/results/?lang=%s&find=Rating&action=%s&comedy=%s&romance=%s&storyline=%s&performance=%s&ratecount=%s",
+			mainUrl, language, action, comedy, romance, storyline, performance, ratecount,
 		)
 		if page > 1 {
 			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
@@ -278,16 +280,13 @@ func scrapeWatchDetails(url string) (*WatchResponse, error) {
 		return nil, err
 	}
 
-	// Scrape the Title
 	title := strings.TrimSpace(doc.Find("#UIMovieSummary div.block2 a.title h3").First().Text())
 
-	// Scrape the Poster URL
 	imgSrc, _ := doc.Find("#UIMovieSummary div.block1 img").Attr("src")
 	if strings.HasPrefix(imgSrc, "//") {
 		imgSrc = "https:" + imgSrc
 	}
 
-	// Scrape the Video Link
 	videoPlayer := doc.Find("#UIVideoPlayer")
 	mp4Link, _ := videoPlayer.Attr("data-mp4-link")
 	if mp4Link == "" {
@@ -299,7 +298,6 @@ func scrapeWatchDetails(url string) (*WatchResponse, error) {
 		if strings.HasPrefix(finalUrl, "//") {
 			finalUrl = "https:" + finalUrl
 		}
-		// Replace IP with CDN domain as per original logic
 		re := regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
 		finalUrl = re.ReplaceAllString(finalUrl, "cdn1.einthusan.io")
 	}
@@ -307,6 +305,6 @@ func scrapeWatchDetails(url string) (*WatchResponse, error) {
 	return &WatchResponse{
 		Title:    title,
 		VideoUrl: finalUrl,
-		ImgUrl:   imgSrc, // Included in response
+		ImgUrl:   imgSrc,
 	}, nil
 }

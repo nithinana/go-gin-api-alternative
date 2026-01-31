@@ -29,9 +29,6 @@ type SearchResponse struct {
 	Language string       `json:"language"`
 	Movies   []MovieEntry `json:"movies"`
 	Query    string       `json:"q"`
-	Page     int          `json:"page"`      // Added for pagination
-	NextPage int          `json:"next_page"` // Added for pagination
-	HasMore  bool         `json:"has_more"`  // Added for pagination
 }
 
 type BrowseResponse struct {
@@ -74,7 +71,7 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "thirai api",
 			"endpoints": gin.H{
-				"search": "/search/:language?q=movie_title&page=1", // Updated endpoint hint
+				"search": "/search/:language?q=movie_title",
 				"browse": "/language/:language?category=recent|popular&page=1",
 				"actors": "/actors/:language/:actorcode?page=1",
 				"genre":  "/genre/:language?action=0-4&comedy=0-4&romance=0-4&storyline=0-4&performance=0-4&ratecount=1&page=1",
@@ -82,51 +79,31 @@ func main() {
 				"year":   "/year/:language/:year?page=1",
 				"watch":  "/watch?url=einthusan_page_url",
 			},
-			"example_usage": "Try /year/tamil/2025 or /search/hindi?q=pathaan&page=2",
+			"example_usage": "Try /year/tamil/2025 or /genre/hindi?action=4&ratecount=5",
 		})
 	})
 
-	// 1. SEARCH WITH PAGINATION
+	// 1. SEARCH
 	r.GET("/search/:language", func(c *gin.Context) {
 		language := c.Param("language")
 		query := c.Query("q")
-		pageStr := c.DefaultQuery("page", "1") // Read page from query
-		page, _ := strconv.Atoi(pageStr)
-
 		if query == "" {
-			c.JSON(http.StatusOK, SearchResponse{Language: language, Movies: []MovieEntry{}, Query: query, Page: page})
+			c.JSON(http.StatusOK, SearchResponse{Language: language, Movies: []MovieEntry{}, Query: query})
 			return
 		}
-
 		fixedQuery := strings.ReplaceAll(query, " ", "+")
 		targetUrl := fmt.Sprintf("%s/movie/results/?lang=%s&query=%s", mainUrl, language, fixedQuery)
-		
-		// Append page parameter if greater than 1
-		if page > 1 {
-			targetUrl = fmt.Sprintf("%s&page=%d", targetUrl, page)
-		}
-
 		movies, err := scrapeEinthusan(targetUrl)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
-		// Sort results by fuzzy match for relevance
 		sort.Slice(movies, func(i, j int) bool {
 			scoreI := fuzzy.RankMatch(strings.ToLower(query), strings.ToLower(movies[i].Title))
 			scoreJ := fuzzy.RankMatch(strings.ToLower(query), strings.ToLower(movies[j].Title))
 			return scoreI > scoreJ
 		})
-
-		c.JSON(http.StatusOK, SearchResponse{
-			Language: language,
-			Movies:   movies,
-			Query:    query,
-			Page:     page,
-			NextPage: page + 1,
-			HasMore:  len(movies) > 0, // Assume more exists if current page returned results
-		})
+		c.JSON(http.StatusOK, SearchResponse{Language: language, Movies: movies, Query: query})
 	})
 
 	// 2. BROWSE
@@ -178,7 +155,7 @@ func main() {
 		romance := c.DefaultQuery("romance", "0")
 		storyline := c.DefaultQuery("storyline", "0")
 		performance := c.DefaultQuery("performance", "0")
-		ratecount := c.DefaultQuery("ratecount", "1") 
+		ratecount := c.DefaultQuery("ratecount", "1") // Dynamic ratecount
 		
 		pageStr := c.DefaultQuery("page", "1")
 		page, _ := strconv.Atoi(pageStr)
